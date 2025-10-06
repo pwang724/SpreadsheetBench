@@ -6,24 +6,7 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
-from win32com.client import Dispatch
 from openpyxl.styles import PatternFill, Font
-
-
-def just_open(filename):
-    filename = os.path.abspath(filename)
-    xlApp = Dispatch("Excel.Application")
-    xlApp.Visible = False
-    xlApp.DisplayAlerts = False
-    xlApp.ScreenUpdating = False
-    try:
-        xlBook = xlApp.Workbooks.Open(Filename=filename, UpdateLinks=False, ReadOnly=False)
-        xlBook.Save()
-        xlBook.Close(SaveChanges=True)
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    finally:
-        xlApp.Quit()
 
 
 def datetime_to_float(dt):
@@ -86,8 +69,8 @@ def compare_font_color(font_gt, font_proc):
 
 
 def col_num2name(n):
-    """ Convert a column number to an Excel column name """
-    name = ''
+    """Convert a column number to an Excel column name"""
+    name = ""
     while n > 0:
         n, remainder = divmod(n - 1, 26)
         name = chr(65 + remainder) + name
@@ -95,40 +78,45 @@ def col_num2name(n):
 
 
 def col_name2num(name):
-    """ Convert an Excel column name to a column number """
+    """Convert an Excel column name to a column number"""
     num = 0
     for c in name:
-        num = num * 26 + (ord(c) - ord('A') + 1)
+        num = num * 26 + (ord(c) - ord("A") + 1)
     return num
 
 
 def parse_cell_range(range_str):
-    """ Parse a range string like 'A1:AB12' """
-    start_cell, end_cell = range_str.split(':')
-    start_col, start_row = '', ''
+    """Parse a range string like 'A1:AB12'"""
+    start_cell, end_cell = range_str.split(":")
+    start_col, start_row = "", ""
     for char in start_cell:
         if char.isdigit():
             start_row += char
         else:
             start_col += char
-    
-    end_col, end_row = '', ''
+
+    end_col, end_row = "", ""
     for char in end_cell:
         if char.isdigit():
             end_row += char
         else:
             end_col += char
 
-    return (col_name2num(start_col), int(start_row)), (col_name2num(end_col), int(end_row))
+    return (col_name2num(start_col), int(start_row)), (
+        col_name2num(end_col),
+        int(end_row),
+    )
 
 
 def generate_cell_names(range_str):
-    """ Generate a list of all cell names in the specified range """
-    if ':' not in range_str:
+    """Generate a list of all cell names in the specified range"""
+    if ":" not in range_str:
         return [range_str]
     (start_col, start_row), (end_col, end_row) = parse_cell_range(range_str)
     columns = [col_num2name(i) for i in range(start_col, end_col + 1)]
-    cell_names = [f"{col}{row}" for col in columns for row in range(start_row, end_row + 1)]
+    cell_names = [
+        f"{col}{row}" for col in columns for row in range(start_row, end_row + 1)
+    ]
     return cell_names
 
 
@@ -148,7 +136,7 @@ def cell_level_compare(wb_gt, wb_proc, sheet_name, cell_range, is_CF):
             msg = f"Value difference at cell {cell_gt.coordinate}: ws_gt has {cell_gt.value},\
                     ws_proc has {cell_proc.value}"
             return False, msg
-        
+
         if is_CF:
             if not compare_fill_color(cell_gt.fill, cell_proc.fill):
                 msg = f"Fill color difference at cell {cell_gt.coordinate}: ws_gt has {cell_gt.fill.fgColor.rgb},\
@@ -184,26 +172,31 @@ def compare_workbooks(gt_file, proc_file, instruction_type, answer_position):
     result = False
     msg = ""
 
-    sheet_cell_ranges = answer_position.split(',')
+    sheet_cell_ranges = answer_position.split(",")
     for sheet_cell_range in sheet_cell_ranges:
-        if '!' in sheet_cell_range:
-            sheet_name, cell_range = sheet_cell_range.split('!')
+        if "!" in sheet_cell_range:
+            sheet_name, cell_range = sheet_cell_range.split("!")
             sheet_name = sheet_name.lstrip("'").rstrip("'")
         else:
             sheet_name = wb_gt.sheetnames[0]
             cell_range = sheet_cell_range
-    result, msg = cell_level_compare(wb_gt, wb_proc, sheet_name, cell_range , is_CF)
+    result, msg = cell_level_compare(wb_gt, wb_proc, sheet_name, cell_range, is_CF)
 
     return result, msg
 
 
 def parse_option():
     parser = argparse.ArgumentParser("command line arguments for evaluation.")
-    
-    parser.add_argument('--model', type=str, help='model name')
-    parser.add_argument('--setting', type=str,
-        help='four setting: single, multi_react_exec, multi_row_exec, multi_row_react_exec')
-    parser.add_argument('--dataset', type=str, default="sample_data_200", help='dataset name')
+
+    parser.add_argument(
+        "--master_folder",
+        type=str,
+        required=True,
+        help="path to master folder containing spreadsheet_bench_*_run_1 subfolders",
+    )
+    parser.add_argument(
+        "--dataset", type=str, default="all_data_912", help="dataset name"
+    )
 
     opt = parser.parse_args()
 
@@ -211,33 +204,101 @@ def parse_option():
 
 
 def evaluation(opt):
-    dataset_path = os.path.abspath(f'../data/{opt.dataset}')
-    with open(f'{dataset_path}/dataset.json', 'r') as fp:
+    dataset_path = os.path.abspath(f"../data/{opt.dataset}")
+    with open(f"{dataset_path}/dataset.json", "r") as fp:
         dataset = json.load(fp)
 
+    master_folder = os.path.abspath(opt.master_folder)
+
     eval_results = []
+    missing_files = []
+    total_evaluated = 0
+    total_passed = 0
+
     for data in tqdm(dataset):
-        test_case_results = []
-        for test_case_idx in range(3):
-            gt_path = f"{dataset_path}/spreadsheet/{data['id']}/{test_case_idx + 1}_{data['id']}_answer.xlsx"
-            proc_path = f"{dataset_path}/outputs/{opt.setting}_{opt.model}/{test_case_idx + 1}_{data['id']}_output.xlsx"
-            try:
-                result, message = compare_workbooks(gt_path, proc_path, data['instruction_type'], data['answer_position'])
-            except:
-                result = 0
-            test_case_results.append(int(result))
-        soft_restriction = test_case_results.count(1) / len(test_case_results)
-        hard_restriction = 0 if 0 in test_case_results else 1
-        eval_results.append({
-            'id': data['id'],
-            'instruction_type': data['instruction_type'],
-            'test_case_results': test_case_results,
-            'soft_restriction': soft_restriction,
-            'hard_restriction': hard_restriction,
-        })
-    
-    with open(f'outputs/eval_{opt.setting}_{opt.model}.json', 'w') as fp:
-        json.dump(eval_results, fp, indent=4)
+        # New file structure: spreadsheet_bench_{id}_run_1/output_ooxml.xlsx
+        task_folder = f"spreadsheet_bench_{data['id']}_run_1"
+        proc_path = os.path.join(master_folder, task_folder, "output_ooxml.xlsx")
+
+        # Check if output file exists
+        if not os.path.exists(proc_path):
+            missing_files.append(proc_path)
+            eval_results.append(
+                {
+                    "id": data["id"],
+                    "instruction_type": data["instruction_type"],
+                    "result": None,
+                    "message": "Output file not found",
+                }
+            )
+            continue
+
+        # Get ground truth from first test case (they all share same output)
+        gt_path = f"{dataset_path}/spreadsheet/{data['id']}/1_{data['id']}_answer.xlsx"
+
+        try:
+            result, message = compare_workbooks(
+                gt_path,
+                proc_path,
+                data["instruction_type"],
+                data["answer_position"],
+            )
+        except Exception as e:
+            result = False
+
+        total_evaluated += 1
+        if result:
+            total_passed += 1
+
+        eval_results.append(
+            {
+                "id": data["id"],
+                "instruction_type": data["instruction_type"],
+                "result": int(result),
+                "message": message if not result else "",
+            }
+        )
+
+    # Calculate success rate (excluding missing files)
+    success_rate = (total_passed / total_evaluated * 100) if total_evaluated > 0 else 0
+
+    # Prepare summary
+    summary = {
+        "total_tasks": len(dataset),
+        "evaluated": total_evaluated,
+        "missing_files": len(missing_files),
+        "passed": total_passed,
+        "failed": total_evaluated - total_passed,
+        "success_rate": round(success_rate, 2),
+    }
+
+    # Extract master folder name for output file
+    master_folder_name = os.path.basename(master_folder)
+    output_path = f"outputs/eval_{master_folder_name}.json"
+    os.makedirs("outputs", exist_ok=True)
+
+    # Save detailed results
+    output_data = {
+        "summary": summary,
+        "missing_files": missing_files,
+        "results": eval_results,
+    }
+
+    with open(output_path, "w") as fp:
+        json.dump(output_data, fp, indent=4)
+
+    # Print summary
+    print(f"\n{'=' * 60}")
+    print(f"Evaluation Summary")
+    print(f"{'=' * 60}")
+    print(f"Total tasks:       {summary['total_tasks']}")
+    print(f"Evaluated:         {summary['evaluated']}")
+    print(f"Missing files:     {summary['missing_files']}")
+    print(f"Passed:            {summary['passed']}")
+    print(f"Failed:            {summary['failed']}")
+    print(f"Success rate:      {summary['success_rate']}%")
+    print(f"{'=' * 60}")
+    print(f"\nResults saved to {output_path}")
 
 
 if __name__ == "__main__":
