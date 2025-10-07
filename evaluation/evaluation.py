@@ -31,7 +31,6 @@ def transform_value(v):
 
 
 def compare_cell_value(v1, v2):
-
     v1 = transform_value(v1)
     v2 = transform_value(v2)
     if (v1 == "" and v2 is None) or (v1 is None and v2 == ""):
@@ -47,25 +46,34 @@ def compare_cell_value(v1, v2):
         return False
 
 
-def compare_fill_color(fill1, fill2):
-    fgColor1 = fill1.fgColor.rgb if fill1.fgColor else None
-    fgColor2 = fill2.fgColor.rgb if fill2.fgColor else None
-    bgColor1 = fill1.bgColor.rgb if fill1.bgColor else None
-    bgColor2 = fill2.bgColor.rgb if fill2.bgColor else None
+# BUG FIX: Color comparison bugfix for SpreadJS import/export round-trip.
+# - Alpha channel is unreliable (can be 00 or FF for same color)
+# - color.rgb can return various types: openpyxl objects, None, "00000000", "FF000000"
+# - We normalize to "00000000" default and compare only last 6 chars (RGB values)
+def _get_color_rgb(color) -> str:
+    """Extract RGB value from color object, defaulting to '00000000' if not a string."""
+    if color and isinstance(color.rgb, str):
+        return color.rgb
+    return "00000000"
 
-    if fgColor1 == fgColor2 and bgColor1 == bgColor2:
-        return True
-    else:
-        return False
+
+def _compare_colors(color1, color2) -> bool:
+    """Compare two colors using only last 6 characters (RGB), ignoring alpha channel."""
+    rgb1 = _get_color_rgb(color1)
+    rgb2 = _get_color_rgb(color2)
+    return rgb1[-6:] == rgb2[-6:]
 
 
-def compare_font_color(font_gt, font_proc):
-    if font_gt.color is not None and font_proc.color is not None:
-        return font_gt.color.rgb == font_proc.color.rgb
-    elif font_gt.color is None and font_proc.color is None:
-        return True
-    else:
-        return False
+def compare_fill_color(fill1, fill2) -> bool:
+    """Compare fill colors between two cells."""
+    return _compare_colors(fill1.fgColor, fill2.fgColor) and _compare_colors(
+        fill1.bgColor, fill2.bgColor
+    )
+
+
+def compare_font_color(font_gt, font_proc) -> bool:
+    """Compare font colors between two cells."""
+    return _compare_colors(font_gt.color, font_proc.color)
 
 
 def col_num2name(n):
